@@ -138,6 +138,8 @@ void Pause();
 static void ResetSaveStateTimes();
 static void LoadSaveStateInfo();
 static void Printscreen();
+static void IncreasePlaybackSpeed();
+static void DecreasePlaybackSpeed();
 static void Reset();
 static void SetAudioVolume();
 static void SetFirmwareLanguage();
@@ -227,6 +229,9 @@ static const char *ui_description =
 "        <menuitem action='record_stop'/>"
 "      </menu>"
 "      <menuitem action='printscreen'/>"
+"      <separator/>"
+"      <menuitem action='IncreaseSpeed'/>"
+"      <menuitem action='DecreaseSpeed'/>"
 "      <separator/>"
 "      <menuitem action='quit'/>"
 "    </menu>"
@@ -421,6 +426,8 @@ static const GtkActionEntry action_entries[] = {
       { "loadfirmware","gtk-open",        "Load Firm_ware file", "<Ctrl>l",  NULL, SelectFirmwareFile },
 #endif
       { "printscreen","gtk-media-record", "Take a _screenshot",    "<Ctrl>s",  NULL,   Printscreen },
+      { "IncreaseSpeed", NULL, "Increase Playback Speed",    "<Ctrl>z",  NULL,   IncreasePlaybackSpeed },
+      { "DecreaseSpeed", NULL, "Decrease Playback Speed",    "<Ctrl>x",  NULL,   DecreasePlaybackSpeed },
       { "quit",       "gtk-quit",         "_Quit",         "<Ctrl>q",  NULL,   DoQuit },
 
     { "ViewMenu", NULL, "_View" },
@@ -528,6 +535,32 @@ enum winsize_enum {
 	WINSIZE_4 = 8,
 	WINSIZE_5 = 10,
 };
+
+static int desiredFpsScalerIndex = 5;
+
+struct scale_factor_t {
+    int base_frame_delay;
+    int num_plus_one_frames;
+};
+
+static const scale_factor_t desiredFpsScalers[] = {
+	{4, 1},
+	{8, 1}, // 200%
+	{9, 1}, // 175%
+	{10, 2}, // 150%
+	{13, 1}, // 125%
+	{16, 2}, // 100%
+	{22, 1},
+	{33, 1}, // 50%
+	{44, 1},
+	{66, 2}, // 25%
+	{103, 2},
+	{133, 1},
+	{266, 2},
+};
+static int log_message = 0;
+static scale_factor_t current_fps_scaler = desiredFpsScalers[desiredFpsScalerIndex];
+
 
 static winsize_enum winsize_current;
 
@@ -2587,6 +2620,21 @@ static void ToggleLayerVisibility(GtkToggleAction* action, gpointer data)
     }
 }
 
+static void IncreasePlaybackSpeed()
+{
+    if (desiredFpsScalerIndex > 0)
+        desiredFpsScalerIndex--;
+    current_fps_scaler = desiredFpsScalers[desiredFpsScalerIndex];
+}
+
+static void DecreasePlaybackSpeed()
+{
+    int desiredFpsScalersLength = sizeof(desiredFpsScalers) / sizeof(desiredFpsScalers[0]);
+    if (desiredFpsScalerIndex < desiredFpsScalersLength - 1)
+        desiredFpsScalerIndex++;
+    current_fps_scaler = desiredFpsScalers[desiredFpsScalerIndex];
+}
+
 static void Printscreen()
 {
     GdkPixbuf *screenshot;
@@ -2860,8 +2908,8 @@ gboolean EmuLoop(gpointer data)
 
         float emu_ratio = fps_FrameCount / 60.0;
         LOG("auto: %d fps: %u skipped: %u emu_ratio: %f Frameskip: %u\n", autoframeskip, fps_FrameCount, skipped_frames, emu_ratio, Frameskip);
-
-        snprintf(Title, sizeof(Title), "DeSmuME - %dfps, %d skipped, draw: %dfps", fps_FrameCount, skipped_frames, draw_count);
+        float speed = (16.0 / current_fps_scaler.base_frame_delay);
+        snprintf(Title, sizeof(Title), "DeSmuME - %dfps, %d skipped, draw: %dfps, speed: %1.2f", fps_FrameCount, skipped_frames, draw_count, speed);
         gtk_window_set_title(GTK_WINDOW(pWindow), Title);
 
 #ifdef HAVE_LIBAGG
@@ -2914,7 +2962,7 @@ gboolean EmuLoop(gpointer data)
                 skipped_frames++;
             }
         }
-        next_frame_time = SDL_GetTicks() + 16;
+        next_frame_time = SDL_GetTicks() + current_fps_scaler.base_frame_delay;
         frame_mod3 = 0;
     } else {
         if (!autoframeskip) {
@@ -2927,7 +2975,7 @@ gboolean EmuLoop(gpointer data)
                 skipped_frames++;
                 // Update next frame time
                 frame_mod3 = (frame_mod3 + 1) % 3;
-                next_frame_time += (frame_mod3 == 0) ? 16 : 17;
+                next_frame_time +=  current_fps_scaler.base_frame_delay + ((frame_mod3 < current_fps_scaler.num_plus_one_frames) ? 1 : 0);
             }
         }
         unsigned this_tick = SDL_GetTicks();
@@ -2949,7 +2997,7 @@ gboolean EmuLoop(gpointer data)
                 skipped_frames++;
                 // Update next frame time
                 frame_mod3 = (frame_mod3 + 1) % 3;
-                next_frame_time += (frame_mod3 == 0) ? 16 : 17;
+                next_frame_time +=  current_fps_scaler.base_frame_delay + ((frame_mod3 < current_fps_scaler.num_plus_one_frames) ? 1 : 0);
             }
             if (Frameskip > autoFrameskipMax) {
                 Frameskip = autoFrameskipMax;
@@ -2963,7 +3011,7 @@ gboolean EmuLoop(gpointer data)
         }
         // We want to achieve a total 17 + 17 + 16 = 50 ms for every 3 frames.
         frame_mod3 = (frame_mod3 + 1) % 3;
-        next_frame_time += (frame_mod3 == 0) ? 16 : 17;
+        next_frame_time +=  current_fps_scaler.base_frame_delay + ((frame_mod3 < current_fps_scaler.num_plus_one_frames) ? 1 : 0);
     }
 
     return TRUE;
